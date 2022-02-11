@@ -721,8 +721,10 @@ if vel_gain:
         r_hr_slice = np.mean(temp[:,int(n_neu/2):n_neu],axis=1)        
         
         fig, ax = plt.subplots(figsize=(3,2))
-        ax.plot(deg_HD,l_hr_slice,color='green',linewidth=3)
-        ax.plot(deg_HD,r_hr_slice,color='darkorange',linewidth=3)
+        ax.plot(deg_HD,l_hr_slice,color='green',linewidth=3,zorder=1)
+        ax.plot(deg_HD,r_hr_slice,color='darkorange',linewidth=3,zorder=1)
+        ax.plot(deg_HD,w_l_hr_hist[:,-1],color='green',linewidth=3,linestyle='dashed',zorder=0)
+        ax.plot(deg_HD,w_r_hr_hist[:,-1],color='darkorange',linewidth=3,linestyle='dashed',zorder=0)
         plt.legend(['L-HR','R-HR'],prop={'size': SMALL_SIZE},frameon=False,ncol=1,bbox_to_anchor=(1.1, 1.2))
         ax.set_title('$W^{HR}$')
         ax.set_ylabel('Synaptic strength')
