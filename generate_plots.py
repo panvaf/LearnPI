@@ -15,6 +15,7 @@ from cycler import cycler
 from astropy.stats.circstats import circmean
 import os
 from pathlib import Path
+import scipy.stats as st
 
 # Simulation options
 sim_run = "2Enough"
@@ -23,10 +24,13 @@ vel_gain = True                # Whether to compute and plot the neural velocity
 vel_hist = False               # Whether to plot velocity histograms
 PI_err = True                  # Whether to produce histogram of errors after PI in darkness
 cut_exc = False                # Whether to exterminate extended positive sidelobes or not
-perturb_conn = False           # Add noise to final connectivity to account for biological irregularities
+perturb_conn = True           # Add noise to final connectivity to account for biological irregularities
 save = False                   # Whether to save results
+est_corr = False               # Whether to estimate correlation between PVA and heading
+t_corr = 140                   # Lenght of correlation window, in sec
+n_corr = 100                   # Number of trials for correlation estimation
 n_hist = 1001                  # Number of bins for angular velocity histograms
-prop_std = .2                  # Noise level as a fraction of variability in connectivity
+prop_std = .25                  # Noise level as a fraction of variability in connectivity
 width = 13                     # Width of extermination
 offset = 4                     # Offset for start of extermination
 n_PI = 1000                    # Number of examples for PI in darkness error
@@ -99,6 +103,11 @@ try:
         stored.append('PI_err')
 except:
     PI_errors = np.nan
+
+try:
+    corr = network['corr']
+except:
+    corr_025 = np.nan; corr_mean = np.nan; corr_975 = np.nan
 
 # Constants
 n_neu = np.size(w,0)
@@ -404,10 +413,11 @@ if perturb_conn:
     filename = "fly_rec" + util.filename(params)
     np.random.seed(params['run'])
     
-    std = np.std(w)
-    w += np.random.normal(0,prop_std*std,(n_neu,2*n_neu))
-    W[:,:,-1] = w
     w_hr = w[:,0:n_neu]; w_rec = w[:,n_neu:2*n_neu]
+    std_hr = np.std(w_hr); std_rec = np.std(w_rec); magn_rot = np.max(w_rot)
+    w_hr += np.random.normal(0,prop_std*std_hr,(n_neu,n_neu))
+    w_rec += np.random.normal(0,prop_std*std_rec,(n_neu,n_neu))
+    W[:,:,-1] = w
     
     # plot new weight matrices
     vmax = np.max(w); vmin = np.min(w)
@@ -687,7 +697,8 @@ ax.xaxis.set_major_locator(MultipleLocator(90))
 ax.yaxis.set_major_locator(MultipleLocator(75))
 ax.yaxis.set_minor_locator(MultipleLocator(37.5))
 plt.xlim([-180,180])
-plt.legend(['Bump','Visual bump','Learning error'],loc='upper right',bbox_to_anchor=(1.2, 1.03), frameon=False)
+plt.legend(['Bump','Visual bump','Learning error'],loc='upper right',
+           bbox_to_anchor=(1.2, 1.03), frameon=False)
 
 
 # Velocity gain plot
@@ -771,7 +782,7 @@ if vel_gain:
     # Velocity histogram
     
     if vel_hist:
-    
+        
         _, v_ang, _ = util.gen_theta0_OU(t_run=40000)
         
         # fit gaussian
@@ -795,23 +806,23 @@ if vel_gain:
         plt.legend(['$N({},{})$'.format(mean,sigma)],loc='upper right', \
                     bbox_to_anchor=(1.08, 1),frameon=False)
         plt.show()
-        
-    
+
+
 # Path integration in darkness error plot
-    
+
 if PI_err:
     
     if 'PI_err' not in stored:
         # Store errors for each simulation
         PI_errors = np.zeros((n_PI,len(PI_dur)))
-            
+        
         for i in range(n_PI):
-                
+            
             print('Path integration in darkness for {} s, simulation {} out of {}'.format(PI_dur[-1],i+1,n_PI))
             theta0_dark, _, _ = util.gen_theta0_OU(PI_dur[-1],bound_vel=True,v_max=500)
             _, _, f, _, _ = rec.simulate(PI_dur[-1],theta0_dark,params,True,False,w,w_rot,day=False)
             bump_pos = util.bump_COM(f,pos)
-                
+            
             for j, dur in enumerate(PI_dur):
                 # Convert to rads to average and back to degrees
                 loc = int(dur/dt)
@@ -852,9 +863,39 @@ if PI_err:
     fig.text(0.55,0,'Path integration error ($\degree$)',ha='center', va='center')
     plt.tight_layout()
 
+
+# Correlation between PVA and heading in darkness
+
+if est_corr:
+    
+    # Store correlation coefficients for different trials
+    corrs = np.zeros(n_corr)
+    
+    for i in range(n_corr):
+        print('Estimating correlation coefficient for trial {} out of {}'.format(i+1,n_corr))
+        
+        # Simulate a trial
+        theta0, v_ang, t = util.gen_theta0_OU(t_corr,sigma=params['sigma_v'])
+        _, _, f, _, _ = rec.simulate(t_corr,theta0,params,True,False,w,w_rot,False)
+        
+        # Obtain PVA
+        bump_pos = util.bump_COM(f,pos)
+        
+        # Unroll PVA
+        diff = np.diff(bump_pos)
+        diff[diff>bump_size*dphi] = diff[diff>bump_size*dphi]-360
+        diff[diff<-bump_size*dphi] = diff[diff<-bump_size*dphi]+360
+        PVA = np.cumsum(diff)
+        
+        # Estimate correlation coefficient
+        corrs[i] = np.corrcoef(PVA,-theta0[1:])[0,1]
+    
+    corr_mean = np.mean(corrs)
+    (corr_025, corr_975) = st.t.interval(alpha=0.95, df=len(corrs)-1, loc=np.mean(corrs), scale=st.sem(corrs))
+
 # Save results
 if save:
     np.savez(data_path+filename + '.npz',w=W,w_rec=w_rec_hist[:,-1],
              w_l_hr=w_l_hr_hist[:,-1],w_r_hr=w_r_hr_hist[:,-1],w_rot=w_rot,
              params=params,hd_v=hd_v,neu_v_dark=neu_v_dark,neu_v_day=neu_v_day,
-             PI_dur=PI_dur,PI_errors=PI_errors,err=error)
+             PI_dur=PI_dur,PI_errors=PI_errors,err=error,corr=[corr_025,corr_mean,corr_975])
